@@ -27,6 +27,7 @@
 
 #include <iostream>
 
+#ifdef OLD
 SerialPort::SerialPort(QObject *parent) : QObject(parent) {
     serialportDevice = new QSerialPort("/dev/ACM0");
     power = 0;
@@ -55,40 +56,6 @@ SerialPort::SerialPort(QObject *parent) : QObject(parent) {
     canDict.insert(tempMap.begin(),tempMap.end());
     bmsVoltages = std::vector<std::string>(4,"");
     bmsTemperatures = std::vector<std::string>(2,"");
-}
-
-void SerialPort::connectToSerialPort() {
-    /* Private variables */
-    qDebug() << "Looking for ECM COM port...";
-    QList<QSerialPortInfo> serialport_device_list;
-    serialport_device_list = QSerialPortInfo::availablePorts();
-    foreach (const QSerialPortInfo &info, QSerialPortInfo::availablePorts()) {
-        qDebug() << "Name : " << info.portName();
-        qDebug() << "Description : " << info.description();
-        qDebug() << "Manufacturer: " << info.manufacturer();
-        if (info.description() == QString::fromStdString("PsdEcmComPort")){
-            serialportDevice->setPort(info);
-            serialportInfo = info;
-        }
-    }
-
-    /* Establishing connection */
-    //serialportDevice->setPortName(serialportInfo.portName());
-
-    if (serialportDevice->open(QSerialPort::ReadOnly)) {
-        qDebug() << "Port " + serialportDevice->portName() + " opened.";
-        serialportDevice->setBaudRate(QSerialPort::Baud115200);
-        serialportDevice->setDataBits(QSerialPort::Data8);
-        serialportDevice->setParity(QSerialPort::NoParity);
-        serialportDevice->setStopBits(QSerialPort::OneStop);
-        serialportDevice->setFlowControl(QSerialPort::NoFlowControl);
-    }
-    else{
-        qDebug() << "Port Could not be opened";
-    }
-    serialportDevice->clear(QSerialPort::AllDirections);
-    if(serialportDevice->isOpen())
-        serialportDevice->close();
 }
 
 void SerialPort::readData()
@@ -306,6 +273,131 @@ int n = 0,
     }
 
 
+#else
+SerialPort::SerialPort(QObject *parent) : QObject(parent) {
+    serialportDevice = new QSerialPort("/dev/ACM0");
+    power = 0;
+    velocity = 0;
+
+
+    std::map<std::string, std::string> tempMap{
+        {"inverter1", "200" },
+        {"inverter2", "201"}
+  };
+    canDict.insert(tempMap.begin(),tempMap.end());
+
+}
+
+
+
+
+void SerialPort::readData()
+{
+    // Stop iterating when we cant find a false
+    std::map<std::string, bool> recievedMessage;
+
+
+        std::map<std::string, bool> temp{
+            {"inverter1", false},
+            {"inverter2",false},
+            };
+        recievedMessage.insert(temp.begin(), temp.end());
+
+
+    auto havntRead = [](std::pair<std::string, bool> element){return !element.second;};
+    while(std::find_if(recievedMessage.begin(), recievedMessage.end(), havntRead) != std::end(recievedMessage)){
+
+        // Code from stackoverflow
+        int USB = open( "/dev/ttyACM0", O_RDWR| O_NOCTTY );
+        struct termios tty;
+memset (&tty, 0, sizeof tty);
+
+/* Error Handling */
+if ( tcgetattr ( USB, &tty ) != 0 ) {
+   std::cout << "Error " << errno << " from tcgetattr: " << strerror(errno) << std::endl;
+}
+
+/* Save old tty parameters */
+//tty_old = tty;
+
+/* Set Baud Rate */
+cfsetospeed (&tty, (speed_t)B115200);
+cfsetispeed (&tty, (speed_t)B115200);
+
+/* Setting other Port Stuff */
+tty.c_cflag     &=  ~PARENB;            // Make 8n1
+tty.c_cflag     &=  ~CSTOPB;
+tty.c_cflag     &=  ~CSIZE;
+tty.c_cflag     |=  CS8;
+
+tty.c_cflag     &=  ~CRTSCTS;           // no flow control
+tty.c_cc[VMIN]   =  1;                  // read doesn't block
+tty.c_cc[VTIME]  =  5;                  // 0.5 seconds read timeout
+tty.c_cflag     |=  CREAD | CLOCAL;     // turn on READ & ignore ctrl lines
+
+/* Make raw */
+cfmakeraw(&tty);
+
+/* Flush Port, then applies attributes */
+tcflush( USB, TCIFLUSH );
+if ( tcsetattr ( USB, TCSANOW, &tty ) != 0) {
+   std::cout << "Error " << errno << " from tcsetattr" << std::endl;
+}
+
+int n = 0,
+        spot = 0;
+    char buf = '\0';
+
+    /* Whole response*/
+    char response[1024];
+    memset(response, '\0', sizeof response);
+
+    do {
+        n = read( USB, &buf, 1 );
+        sprintf( &response[spot], "%c", buf );
+        spot += n;
+    } while( buf != '\r' && n > 0);
+
+    if (n < 0) {
+        std::cout << "Error reading: " << strerror(errno) << std::endl;
+    }
+    else if (n == 0) {
+        std::cout << "Read nothing!" << std::endl;
+    }
+    else {
+        std::cout << "Response: " << response << std::endl;
+    }
+
+    message.assign(response, response + 1024);
+    response[0] = 0;
+    close(USB);
+        //auto data = serialportDevice->readAll();
+        std::string id = message.substr(0, 3);
+
+        if (id == canDict["inverter1"]) {
+            velocity =((uint16_t)strtoul(message.substr(11,8).c_str(),NULL, 2)<<8) + strtoul(message.substr(3,8).c_str(),NULL, 2);
+            current =(((uint16_t)strtoul(message.substr(27,8).c_str(),NULL, 2)<<8) + strtoul(message.substr(19,8).c_str(),NULL, 2))/10;
+            battery =((uint16_t)strtoul(message.substr(43,8).c_str(),NULL, 2)<<8) + strtoul(message.substr(35,8).c_str(),NULL, 2);
+            power= (battery*velocity)/1000;
+                    //(strtoul(message.substr(27,8).c_str(),NULL, 2) << 8) + strtoul(message.substr(19,8).c_str(),NULL, 2);
+            recievedMessage["inverter1"] = true;
+        }
+        if (id == canDict["inverter2"]) {
+            //velocity.second = strtoul(message.substr(12,2).c_str(), NULL, 16);
+            //battery.second = strtoul();
+            recievedMessage["inverter2"] = true;
+        }
+
+
+
+
+
+
+
+    }
+}
+#endif
+
 /*
     1 długie
     2 prawy
@@ -315,10 +407,44 @@ int n = 0,
     6 awaryjne
     9 postojowe
 */
+void SerialPort::connectToSerialPort() {
+    /* Private variables */
+    qDebug() << "Looking for ECM COM port...";
+    QList<QSerialPortInfo> serialport_device_list;
+    serialport_device_list = QSerialPortInfo::availablePorts();
+    foreach (const QSerialPortInfo &info, QSerialPortInfo::availablePorts()) {
+        qDebug() << "Name : " << info.portName();
+        qDebug() << "Description : " << info.description();
+        qDebug() << "Manufacturer: " << info.manufacturer();
+        if (info.description() == QString::fromStdString("PsdEcmComPort")){
+            serialportDevice->setPort(info);
+            serialportInfo = info;
+        }
+    }
+
+    /* Establishing connection */
+    //serialportDevice->setPortName(serialportInfo.portName());
+
+    if (serialportDevice->open(QSerialPort::ReadOnly)) {
+        qDebug() << "Port " + serialportDevice->portName() + " opened.";
+        serialportDevice->setBaudRate(QSerialPort::Baud115200);
+        serialportDevice->setDataBits(QSerialPort::Data8);
+        serialportDevice->setParity(QSerialPort::NoParity);
+        serialportDevice->setStopBits(QSerialPort::OneStop);
+        serialportDevice->setFlowControl(QSerialPort::NoFlowControl);
+    }
+    else{
+        qDebug() << "Port Could not be opened";
+    }
+    serialportDevice->clear(QSerialPort::AllDirections);
+    if(serialportDevice->isOpen())
+        serialportDevice->close();
+}
 
 double SerialPort::getVelocity(){return velocity;}
 double SerialPort::getBattery(){return battery;}
 double SerialPort::getPower(){return power;}
+#ifdef OLD
 bool SerialPort::getRightIndicator(){return rightIndicator;}
 bool SerialPort::getLeftIndicator(){return leftIndicator;}
 bool SerialPort::getLongLights(){return longLights;}
@@ -334,3 +460,4 @@ QString SerialPort::getWarningVolt(){return QString::fromStdString(warningVolt);
 QString SerialPort::getWarningVoltDiff(){return QString::fromStdString(warningVoltDiff);};
 
 bool SerialPort::getCharging(){return charging;}
+#endif

@@ -21,6 +21,7 @@ public slots:
   double getVelocity();
   double getBattery();
   double getPower();
+#ifdef OLD
   bool getRightIndicator();
   bool getLeftIndicator();
   bool getLongLights();
@@ -36,28 +37,39 @@ public slots:
   QString getWarningVoltDiff();
 
   bool getCharging();
+#endif
 private:
   QSerialPort *serialportDevice;
   QSerialPortInfo serialportInfo;
-  double velocity;
+
+#ifdef OLD
+
   double battery;
-  double power;
   bool leftIndicator;
   bool rightIndicator;
   bool shortLights;
   bool longLights;
   bool bmsMode;
 
-  std::string message;
+
 
   std::string warningCurrent;
   std::string warningTemp;
   std::string warningVolt;
   std::string warningVoltDiff;
 
-  std::map<std::string, std::string> canDict;
+
   std::vector<std::string> bmsVoltages;
   std::vector<std::string> bmsTemperatures;
 
   bool charging;
+#else
+  uint16_t velocity;
+  double power;
+  uint16_t current;
+  uint16_t battery;
+  std::map<std::string, std::string> canDict;
+  std::string message;
+
+#endif
 };
